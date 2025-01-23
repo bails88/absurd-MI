@@ -1,5 +1,5 @@
 import streamlit as st
-import utils
+import sidebar
 
 # First thing in the page
 sidebar.add_sidebar_logo()
