@@ -25,23 +25,25 @@ credentials_dict = {
 # 2. Create a BigQuery client from service account info
 client = bigquery.Client.from_service_account_info(credentials_dict)
 
-# 3. Calculate the current financial year start/end
+# 3. Calculate the start date for the current financial year (most recent 1st October)
 today = datetime.today()
 if today.month >= 10:
     start_of_financial_year = datetime(today.year, 10, 1)
-    end_of_financial_year = datetime(today.year + 1, 9, 30)
 else:
     start_of_financial_year = datetime(today.year - 1, 10, 1)
-    end_of_financial_year = datetime(today.year, 9, 30)
 
-# 4. Calculate the previous financial year dates
+# For the current range, we'll go from 1st October up to "today"
+end_of_financial_year = today  # end date is today
+
+# 4. Calculate the previous year's corresponding range (1 year back)
 start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
 end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
+# Generate a list of all months in the current financial year up to today
 months_in_fy = pd.date_range(
     start=start_of_financial_year,
     end=end_of_financial_year,
-    freq="MS"
+    freq="MS"  # Month Start Frequency
 ).to_pydatetime()
 
 months_df = pd.DataFrame({
@@ -49,12 +51,14 @@ months_df = pd.DataFrame({
     "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
 })
 
+# Convert dates to strings for BigQuery
 start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
 end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
+
 prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
 prev_end_date_str = end_of_previous_financial_year.strftime('%Y-%m-%d')
 
-# 5. Define queries
+# 5. Define queries for current and previous year
 current_query = f"""
 SELECT 
     FORMAT_TIMESTAMP('%Y-%m', issue_date) AS month,
@@ -93,6 +97,8 @@ try:
     current_rows = list(current_query_job)
     current_data = pd.DataFrame([dict(row) for row in current_rows])
     current_data['month'] = pd.to_datetime(current_data['month'], format='%Y-%m')
+
+    # Fill missing months
     current_data = months_df.merge(current_data, on='month', how='left')
     current_data['total_amount'] = current_data['total_amount'].fillna(0)
     current_data = current_data.sort_values(by='month')
@@ -126,7 +132,7 @@ try:
             alt.Tooltip('total_amount:Q', title='Total Invoiced (£)', format=',.2f')
         ]
     ).properties(
-        title="Invoiced Amount by Month (YTD)",
+        title="Invoiced Amount by Month (From 1st Oct to Today)",
         width="container",
         height=400
     )
