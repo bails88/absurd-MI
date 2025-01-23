@@ -12,7 +12,7 @@ credentials_dict = {
     "type": os.environ["type"],
     "project_id": os.environ["project_id"],
     "private_key_id": os.environ["private_key_id"],
-    "private_key": os.environ["private_keyY"],
+    "private_key": os.environ["private_key"],
     "client_email": os.environ["client_email"],
     "client_id": os.environ["client_id"],
     "auth_uri": os.environ["auth_uri"],
