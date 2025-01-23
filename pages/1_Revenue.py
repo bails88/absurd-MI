@@ -22,10 +22,9 @@ credentials_dict = {
 }
 
 # 2. Create a BigQuery client from service account info
-from google.cloud import bigquery
 client = bigquery.Client.from_service_account_info(credentials_dict)
 
-# 3. Calculate start dates for the most recent 1st October up to today
+# 3. Calculate financial year range: 1st October to 'today'
 today = datetime.today()
 if today.month >= 10:
     start_of_financial_year = datetime(today.year, 10, 1)
@@ -34,28 +33,17 @@ else:
 
 end_of_financial_year = today  # up to today
 
-# Calculate previous year's date range
+# Previous year's equivalent range
 start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
 end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
-# Create a monthly range from 1st Oct to 'today'
-months_in_fy = pd.date_range(
-    start=start_of_financial_year,
-    end=end_of_financial_year,
-    freq="MS"
-).to_pydatetime()
-
-months_df = pd.DataFrame({
-    "month": months_in_fy,
-    "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
-})
-
+# Convert to strings for queries
 start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
 end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
 prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
 prev_end_date_str = end_of_previous_financial_year.strftime('%Y-%m-%d')
 
-# 4. Queries
+# 4. Queries for monthly totals
 current_query = f"""
 SELECT 
     FORMAT_TIMESTAMP('%Y-%m', issue_date) AS month,
@@ -88,32 +76,100 @@ ORDER BY
     month ASC;
 """
 
+# 5. Queries for client-level data
+current_clients_query = f"""
+SELECT
+  client.name AS client_name,
+  SUM(line_item.amount) AS revenue_current
+FROM
+  `marketing-434610.harvest.Invoices`,
+  UNNEST(line_items) AS line_item
+WHERE
+  issue_date BETWEEN '{start_date_str}' AND '{end_date_str}'
+  AND state IN ('open', 'paid', 'draft')
+GROUP BY
+  client_name
+ORDER BY
+  client_name;
+"""
+
+previous_clients_query = f"""
+SELECT
+  client.name AS client_name,
+  SUM(line_item.amount) AS revenue_previous
+FROM
+  `marketing-434610.harvest.Invoices`,
+  UNNEST(line_items) AS line_item
+WHERE
+  issue_date BETWEEN '{prev_start_date_str}' AND '{prev_end_date_str}'
+  AND state IN ('open', 'paid', 'draft')
+GROUP BY
+  client_name
+ORDER BY
+  client_name;
+"""
+
 try:
-    # Current year data
+    # --- A) Monthly Totals for Chart & Metrics ---
+    # Current year
     current_rows = list(client.query(current_query))
     current_data = pd.DataFrame([dict(row) for row in current_rows])
     current_data['month'] = pd.to_datetime(current_data['month'], format='%Y-%m')
+    # Fill missing months
+    months_in_fy = pd.date_range(start=start_of_financial_year, end=end_of_financial_year, freq="MS")
+    months_df = pd.DataFrame({
+        "month": months_in_fy,
+        "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
+    })
     current_data = months_df.merge(current_data, on='month', how='left')
     current_data['total_amount'] = current_data['total_amount'].fillna(0)
     current_data = current_data.sort_values(by='month')
     total_invoiced_current = current_data['total_amount'].sum()
 
-    # Previous year data
+    # Previous year
     previous_rows = list(client.query(previous_query))
     previous_data = pd.DataFrame([dict(row) for row in previous_rows])
     total_invoiced_previous = previous_data['total_amount'].sum()
 
-    # Compute % difference: ((current - previous) / previous) * 100
-    # Handle the case if previous is zero
+    # % difference
     if total_invoiced_previous == 0:
         percent_diff = 0.0
     else:
         diff = total_invoiced_current - total_invoiced_previous
         percent_diff = (diff / total_invoiced_previous) * 100
 
-    # Display metrics
-    col1, col2, col3 = st.columns(3)
+    # --- B) Client-Level Data for Table ---
+    current_clients_rows = list(client.query(current_clients_query))
+    prev_clients_rows = list(client.query(previous_clients_query))
 
+    current_clients_df = pd.DataFrame([dict(row) for row in current_clients_rows])
+    prev_clients_df = pd.DataFrame([dict(row) for row in prev_clients_rows])
+
+    # Merge on client_name
+    clients_merged = pd.merge(
+        current_clients_df, 
+        prev_clients_df,
+        on='client_name',
+        how='outer'
+    ).fillna(0)
+
+    # Calculate difference
+    clients_merged['difference'] = clients_merged['revenue_current'] - clients_merged['revenue_previous']
+
+    # Rename columns to match your desired output
+    clients_merged.rename(columns={
+        'client_name': 'Client name',
+        'revenue_current': 'Revenue YTD',
+        'revenue_previous': 'Revenue previous YTD',
+        'difference': 'Difference'
+    }, inplace=True)
+
+    # Sort table by largest difference
+    clients_merged = clients_merged.sort_values(by='Difference', ascending=False)
+
+    # --- C) Display UI ---
+    # Metrics row
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(
             label=f"Current (1 Oct - {end_of_financial_year.strftime('%d %b %Y')})",
@@ -126,11 +182,14 @@ try:
         )
     with col3:
         st.metric(
-            label="Year-Over-Year % Change",
+            label="YOY % Change",
             value=f"{percent_diff:,.1f}%",
         )
 
-    # Altair bar chart
+    # Add vertical padding between metrics and chart
+    st.write("")  # or st.write("##") for bigger spacing, or st.divider()
+    
+    # Chart
     chart = alt.Chart(current_data).mark_bar().encode(
         x=alt.X('month_label:N', title="Month", sort=list(current_data['month_label'])),
         y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
@@ -143,8 +202,11 @@ try:
         width="container",
         height=400
     )
-
     st.altair_chart(chart, use_container_width=True)
+
+    # Table below the chart
+    st.subheader("Revenue by Client")
+    st.dataframe(clients_merged)
 
 except Exception as e:
     st.error(f"An error occurred: {str(e)}")
