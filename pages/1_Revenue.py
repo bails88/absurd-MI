@@ -4,7 +4,6 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import datetime
-import json
 
 st.title("Revenue")
 
@@ -23,27 +22,27 @@ credentials_dict = {
 }
 
 # 2. Create a BigQuery client from service account info
+from google.cloud import bigquery
 client = bigquery.Client.from_service_account_info(credentials_dict)
 
-# 3. Calculate the start date for the current financial year (most recent 1st October)
+# 3. Calculate start dates for the most recent 1st October up to today
 today = datetime.today()
 if today.month >= 10:
     start_of_financial_year = datetime(today.year, 10, 1)
 else:
     start_of_financial_year = datetime(today.year - 1, 10, 1)
 
-# For the current range, we'll go from 1st October up to "today"
-end_of_financial_year = today  # end date is today
+end_of_financial_year = today  # up to today
 
-# 4. Calculate the previous year's corresponding range (1 year back)
+# Calculate previous year's date range
 start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
 end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
-# Generate a list of all months in the current financial year up to today
+# Create a monthly range from 1st Oct to 'today'
 months_in_fy = pd.date_range(
     start=start_of_financial_year,
     end=end_of_financial_year,
-    freq="MS"  # Month Start Frequency
+    freq="MS"
 ).to_pydatetime()
 
 months_df = pd.DataFrame({
@@ -51,14 +50,12 @@ months_df = pd.DataFrame({
     "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
 })
 
-# Convert dates to strings for BigQuery
 start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
 end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
-
 prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
 prev_end_date_str = end_of_previous_financial_year.strftime('%Y-%m-%d')
 
-# 5. Define queries for current and previous year
+# 4. Queries
 current_query = f"""
 SELECT 
     FORMAT_TIMESTAMP('%Y-%m', issue_date) AS month,
@@ -92,38 +89,48 @@ ORDER BY
 """
 
 try:
-    # Execute current year query
-    current_query_job = client.query(current_query)
-    current_rows = list(current_query_job)
+    # Current year data
+    current_rows = list(client.query(current_query))
     current_data = pd.DataFrame([dict(row) for row in current_rows])
     current_data['month'] = pd.to_datetime(current_data['month'], format='%Y-%m')
-
-    # Fill missing months
     current_data = months_df.merge(current_data, on='month', how='left')
     current_data['total_amount'] = current_data['total_amount'].fillna(0)
     current_data = current_data.sort_values(by='month')
     total_invoiced_current = current_data['total_amount'].sum()
 
-    # Execute previous year query
-    previous_query_job = client.query(previous_query)
-    previous_rows = list(previous_query_job)
+    # Previous year data
+    previous_rows = list(client.query(previous_query))
     previous_data = pd.DataFrame([dict(row) for row in previous_rows])
     total_invoiced_previous = previous_data['total_amount'].sum()
 
+    # Compute % difference: ((current - previous) / previous) * 100
+    # Handle the case if previous is zero
+    if total_invoiced_previous == 0:
+        percent_diff = 0.0
+    else:
+        diff = total_invoiced_current - total_invoiced_previous
+        percent_diff = (diff / total_invoiced_previous) * 100
+
     # Display metrics
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
+
     with col1:
         st.metric(
-            label=f"Total Invoiced ({start_of_financial_year.strftime('%d %b %Y')} - {end_of_financial_year.strftime('%d %b %Y')})",
+            label=f"Current (1 Oct - {end_of_financial_year.strftime('%d %b %Y')})",
             value=f"£{total_invoiced_current:,.2f}",
         )
     with col2:
         st.metric(
-            label=f"Total Invoiced ({start_of_previous_financial_year.strftime('%d %b %Y')} - {end_of_previous_financial_year.strftime('%d %b %Y')})",
+            label=f"Previous (1 Oct - {end_of_previous_financial_year.strftime('%d %b %Y')})",
             value=f"£{total_invoiced_previous:,.2f}",
         )
+    with col3:
+        st.metric(
+            label="Year-Over-Year % Change",
+            value=f"{percent_diff:,.1f}%",
+        )
 
-    # Create a bar chart with Altair
+    # Altair bar chart
     chart = alt.Chart(current_data).mark_bar().encode(
         x=alt.X('month_label:N', title="Month", sort=list(current_data['month_label'])),
         y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
