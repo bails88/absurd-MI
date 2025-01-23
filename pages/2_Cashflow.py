@@ -7,11 +7,6 @@ import altair as alt
 from datetime import datetime
 from google.cloud import bigquery
 
-# Front Matter for custom page title with emoji
-# ---
-# title: "Cashflow 💸"
-# ---
-
 # Cache credentials to avoid reloading on every rerun
 @st.cache_data
 def load_credentials():
@@ -33,13 +28,13 @@ def load_credentials():
 @st.cache_data
 def load_day_by_day_data(client, start_date):
     """
-    Return day-by-day sums of 'due_amount' from 1 Oct onward.
+    Return day-by-day sums of 'due_amount' and 'tax_amount' from 1 Oct onward.
     No upper bound, so any future due dates are included.
     """
     query = f"""
     SELECT
       due_date,
-      SUM(due_amount) AS total_amount
+      SUM(due_amount) + SUM(tax_amount) AS total_amount
     FROM
       `marketing-434610.harvest.Invoices`
     WHERE
@@ -59,13 +54,13 @@ def load_day_by_day_data(client, start_date):
 @st.cache_data
 def load_month_by_month_data(client, start_date):
     """
-    Return month-year sums of 'due_amount' from 1 Oct onward
+    Return month-year sums of 'due_amount' and 'tax_amount' from 1 Oct onward
     so we can pivot them into columns.
     """
     query = f"""
     SELECT
       FORMAT_TIMESTAMP('%Y-%m', due_date) AS month_year,
-      SUM(due_amount) AS total_amount
+      SUM(due_amount) + SUM(tax_amount) AS total_amount
     FROM
       `marketing-434610.harvest.Invoices`
     WHERE
@@ -82,7 +77,7 @@ def load_month_by_month_data(client, start_date):
     return df
 
 def main():
-    # Set page configuration (optional but recommended)
+    # Set page configuration with emoji and wide layout
     st.set_page_config(page_title="Cashflow 💸", layout="wide")
     
     st.title("Cashflow 💸")
@@ -111,7 +106,7 @@ def main():
         day_df['due_date'] = pd.to_datetime([])
         day_df['total_amount'] = pd.Series(dtype='float')
 
-    st.markdown(f"**Data from {start_date_str} onwards, day by day, using `due_date` and summing `due_amount`.**")
+    st.markdown(f"**Data from {start_date_str} onwards, day by day, using `due_date` and summing `due_amount` and `tax_amount`.**")
 
     # 5. Day-by-day line chart
     if day_df.empty:
