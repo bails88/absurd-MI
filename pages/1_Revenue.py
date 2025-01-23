@@ -7,7 +7,7 @@ from google.cloud import bigquery
 
 st.title("Revenue")
 
-# 1. Retrieve GCP credentials from Streamlit secrets
+# 1. Retrieve Render Env Variables Group
 credentials_dict = {
     "type": os.environ["type"],
     "project_id": os.environ["project_id"],
