@@ -21,9 +21,11 @@ credentials_dict = {
     "client_x509_cert_url": st.secrets["gcp"]["client_x509_cert_url"]
 }
 
+# 2. Create a BigQuery client from service account info
 from google.cloud import bigquery
 client = bigquery.Client.from_service_account_info(credentials_dict)
 
+# 3. Calculate financial year range: 1st October to 'today'
 today = datetime.today()
 if today.month >= 10:
     start_of_financial_year = datetime(today.year, 10, 1)
@@ -32,7 +34,6 @@ else:
 
 end_of_financial_year = today
 
-import pandas as pd
 start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
 end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
@@ -41,7 +42,7 @@ end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
 prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
 prev_end_date_str = end_of_previous_financial_year.strftime('%Y-%m-%d')
 
-# Queries for monthly totals
+# --- A) Queries for monthly totals ---
 current_query = f"""
 SELECT 
     FORMAT_TIMESTAMP('%Y-%m', issue_date) AS month,
@@ -74,7 +75,7 @@ ORDER BY
     month ASC;
 """
 
-# Queries for client-level data
+# --- B) Queries for client-level data ---
 current_clients_query = f"""
 SELECT
   client.name AS client_name,
@@ -108,7 +109,7 @@ ORDER BY
 """
 
 try:
-    # Monthly Totals
+    # 1) Monthly Totals for Chart & Metrics
     current_data = pd.DataFrame([dict(row) for row in client.query(current_query)])
     previous_data = pd.DataFrame([dict(row) for row in client.query(previous_query)])
 
@@ -118,7 +119,6 @@ try:
         "month": months_in_fy,
         "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
     })
-
     current_data = months_df.merge(current_data, on='month', how='left')
     current_data['total_amount'] = current_data['total_amount'].fillna(0)
     current_data = current_data.sort_values(by='month')
@@ -132,36 +132,43 @@ try:
         diff = total_invoiced_current - total_invoiced_previous
         percent_diff = (diff / total_invoiced_previous) * 100
 
-    # Client-Level Data
+    # 2) Client-Level Data
     current_clients_df = pd.DataFrame([dict(row) for row in client.query(current_clients_query)])
     prev_clients_df = pd.DataFrame([dict(row) for row in client.query(previous_clients_query)])
     clients_merged = pd.merge(current_clients_df, prev_clients_df, on='client_name', how='outer').fillna(0)
 
+    # a) Calculate the difference in £
+    clients_merged["Difference"] = clients_merged["revenue_current"] - clients_merged["revenue_previous"]
+
+    # b) Calculate % difference
     def calc_percentage_diff(row):
         if row["revenue_previous"] == 0:
-            return None
+            return None  # We'll show '-' for zero previous
         return ((row["revenue_current"] - row["revenue_previous"]) / row["revenue_previous"]) * 100
-
     clients_merged["% Difference"] = clients_merged.apply(calc_percentage_diff, axis=1)
 
+    # c) Rename columns
     clients_merged.rename(columns={
         'client_name': 'Client name',
         'revenue_current': 'Revenue YTD',
         'revenue_previous': 'Revenue previous YTD'
     }, inplace=True)
 
+    # d) Sort by largest YTD revenue
     clients_merged.sort_values(by='Revenue YTD', ascending=False, inplace=True)
 
-    # Insert totals row
+    # e) Insert Totals row
+    total_difference = total_invoiced_current - total_invoiced_previous
     totals_row = {
         'Client name': 'Total',
         'Revenue YTD': total_invoiced_current,
         'Revenue previous YTD': total_invoiced_previous,
+        'Difference': total_difference,
         '% Difference': percent_diff
     }
     clients_merged = pd.concat([clients_merged, pd.DataFrame([totals_row])], ignore_index=True)
 
-    # Dashboard
+    # 3) Dashboard: Metrics
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(
@@ -176,7 +183,7 @@ try:
     with col3:
         st.metric("YOY % Change", f"{percent_diff:,.1f}%")
 
-    st.write("")
+    st.write("")  # Spacing
 
     chart = alt.Chart(current_data).mark_bar().encode(
         x=alt.X('month_label:N', title="Month", sort=list(current_data['month_label'])),
@@ -194,30 +201,47 @@ try:
 
     st.subheader("Revenue by Client")
 
-    display_columns = ["Client name", "Revenue YTD", "Revenue previous YTD", "% Difference"]
+    # 4) Build table: now has Difference + % Difference columns
+    display_columns = ["Client name", "Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
     df_for_styling = clients_merged[display_columns].copy()
 
+    # Conditional styling for % difference
     def highlight_diff(val):
         if val is None or not isinstance(val, (float, int)):
             return ""
         return "color: green" if val > 0 else ("color: red" if val < 0 else "")
 
-    # Hide the index with set_table_styles instead of .hide_index()
-    styled_df = df_for_styling.style \
-        .format(
-            {
-                "Revenue YTD": "£{:,.2f}",
-                "Revenue previous YTD": "£{:,.2f}",
-                "% Difference": lambda x: "-" if pd.isnull(x) else f"{x:,.1f}%"
-            }
-        ) \
-        .applymap(highlight_diff, subset=["% Difference"]) \
-        .set_table_styles(
-            [
-                {"selector": "th.row_heading", "props": [("display", "none")]},
-                {"selector": "th.blank", "props": [("display", "none")]}
+    # Format columns
+    styled_df = df_for_styling.style.format(
+        {
+            "Revenue YTD": "£{:,.2f}",
+            "Revenue previous YTD": "£{:,.2f}",
+            "Difference": "£{:,.2f}",
+            "% Difference": lambda x: "-" if pd.isnull(x) else f"{x:,.1f}%"
+        }
+    ).applymap(
+        highlight_diff, subset=["% Difference"]
+    )
+
+    # Right-align numeric columns
+    numeric_cols = ["Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
+    styled_df.set_properties(**{"text-align": "right"}, subset=numeric_cols)
+
+    # Thicker top border & bold text for last row (the totals row)
+    styled_df.set_table_styles([
+        # Hide index if needed (pandas < 1.4 workaround below)
+        {"selector": "th.row_heading", "props": [("display", "none")]},
+        {"selector": "th.blank", "props": [("display", "none")]},
+
+        # Bold last row + thick top border
+        {
+            "selector": "tbody tr:last-child",
+            "props": [
+                ("font-weight", "bold"),
+                ("border-top", "3px solid black")
             ]
-        )
+        }
+    ], overwrite=False)
 
     st.write(styled_df.to_html(), unsafe_allow_html=True)
 
