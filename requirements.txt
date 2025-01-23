@@ -2,3 +2,5 @@ streamlit
 google-cloud-bigquery
 pandas
 db_dtypes
+gcsfs
+st-files-connection

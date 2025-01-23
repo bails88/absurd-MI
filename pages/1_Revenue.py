@@ -7,54 +7,54 @@ from datetime import datetime
 import json
 
 st.title("Revenue")
-# Your existing revenue tracking code
 
-# Use Streamlit secrets
+# 1. Retrieve GCP credentials from Streamlit secrets
 credentials_dict = {
     "type": st.secrets["gcp"]["type"],
     "project_id": st.secrets["gcp"]["project_id"],
+    "private_key_id": st.secrets["gcp"]["private_key_id"],
     "private_key": st.secrets["gcp"]["private_key"],
-    "client_email": st.secrets["gcp"]["client_email"]
+    "client_email": st.secrets["gcp"]["client_email"],
+    "client_id": st.secrets["gcp"]["client_id"],
+    "auth_uri": st.secrets["gcp"]["auth_uri"],
+    "token_uri": st.secrets["gcp"]["token_uri"],
+    "auth_provider_x509_cert_url": st.secrets["gcp"]["auth_provider_x509_cert_url"],
+    "client_x509_cert_url": st.secrets["gcp"]["client_x509_cert_url"]
 }
 
-# Create credentials from dictionary
+# 2. Create a BigQuery client from service account info
 client = bigquery.Client.from_service_account_info(credentials_dict)
 
-# Calculate the current financial year start and end dates
+# 3. Calculate the current financial year start/end
 today = datetime.today()
-if today.month >= 10:  # October to December: current year is the financial year start
+if today.month >= 10:
     start_of_financial_year = datetime(today.year, 10, 1)
     end_of_financial_year = datetime(today.year + 1, 9, 30)
-else:  # January to September: previous year is the financial year start
+else:
     start_of_financial_year = datetime(today.year - 1, 10, 1)
     end_of_financial_year = datetime(today.year, 9, 30)
 
-# Calculate the previous financial year start and end dates
-start_of_previous_financial_year = start_of_financial_year - pd.DateOffset(years=1)
-end_of_previous_financial_year = end_of_financial_year - pd.DateOffset(years=1)
+# 4. Calculate the previous financial year dates
+start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
+end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
-# Generate a list of all months in the financial year
 months_in_fy = pd.date_range(
     start=start_of_financial_year,
     end=end_of_financial_year,
-    freq="MS"  # Month Start Frequency
+    freq="MS"
 ).to_pydatetime()
 
-# Convert to a DataFrame for joining later
 months_df = pd.DataFrame({
     "month": months_in_fy,
     "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
 })
 
-# Convert dates to strings for BigQuery
 start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
 end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
-
-# Convert previous financial year dates to strings
 prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
 prev_end_date_str = end_of_previous_financial_year.strftime('%Y-%m-%d')
 
-# Query to calculate the total line item amounts by month
+# 5. Define queries
 current_query = f"""
 SELECT 
     FORMAT_TIMESTAMP('%Y-%m', issue_date) AS month,
@@ -88,41 +88,23 @@ ORDER BY
 """
 
 try:
-    # Execute the current year query and get results
+    # Execute current year query
     current_query_job = client.query(current_query)
     current_rows = list(current_query_job)
-    
-    # Convert to DataFrame
-    current_data = [dict(row) for row in current_rows]
-    current_result = pd.DataFrame(current_data)
+    current_data = pd.DataFrame([dict(row) for row in current_rows])
+    current_data['month'] = pd.to_datetime(current_data['month'], format='%Y-%m')
+    current_data = months_df.merge(current_data, on='month', how='left')
+    current_data['total_amount'] = current_data['total_amount'].fillna(0)
+    current_data = current_data.sort_values(by='month')
+    total_invoiced_current = current_data['total_amount'].sum()
 
-    # Convert 'month' to datetime for proper handling
-    current_result['month'] = pd.to_datetime(current_result['month'], format='%Y-%m')
-
-    # Merge the query result with the full financial year months to fill in missing months
-    current_result = months_df.merge(current_result, on='month', how='left')
-
-    # Replace NaN values in 'total_amount' with 0 for months with no data
-    current_result['total_amount'] = current_result['total_amount'].fillna(0)
-
-    # Ensure proper ordering of months
-    current_result = current_result.sort_values(by='month')
-
-    # Calculate the total invoiced for the current financial year
-    total_invoiced_current = current_result['total_amount'].sum()
-
-    # Execute the previous year query and get results
+    # Execute previous year query
     previous_query_job = client.query(previous_query)
     previous_rows = list(previous_query_job)
+    previous_data = pd.DataFrame([dict(row) for row in previous_rows])
+    total_invoiced_previous = previous_data['total_amount'].sum()
 
-    # Convert to DataFrame
-    previous_data = [dict(row) for row in previous_rows]
-    previous_result = pd.DataFrame(previous_data)
-
-    # Calculate the total invoiced for the previous financial year
-    total_invoiced_previous = previous_result['total_amount'].sum()
-
-     # Display metrics
+    # Display metrics
     col1, col2 = st.columns(2)
     with col1:
         st.metric(
@@ -136,8 +118,8 @@ try:
         )
 
     # Create a bar chart with Altair
-    chart = alt.Chart(current_result).mark_bar().encode(
-        x=alt.X('month_label:N', title="Month", sort=list(current_result['month_label'])),  # Explicit order
+    chart = alt.Chart(current_data).mark_bar().encode(
+        x=alt.X('month_label:N', title="Month", sort=list(current_data['month_label'])),
         y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
         tooltip=[
             alt.Tooltip('month_label:N', title='Month'),
@@ -149,7 +131,6 @@ try:
         height=400
     )
 
-    # Display the chart
     st.altair_chart(chart, use_container_width=True)
 
 except Exception as e:
