@@ -4,16 +4,21 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import datetime
+import json
 
 st.title("Revenue")
 # Your existing revenue tracking code
 
+# Use Streamlit secrets
+credentials_dict = {
+    "type": st.secrets["gcp"]["type"],
+    "project_id": st.secrets["gcp"]["project_id"],
+    "private_key": st.secrets["gcp"]["private_key"],
+    "client_email": st.secrets["gcp"]["client_email"]
+}
 
-# Set up BigQuery credentials
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "bigquery.json"
-
-# Initialize BigQuery client
-client = bigquery.Client()
+# Create credentials from dictionary
+client = bigquery.Client.from_service_account_info(credentials_dict)
 
 # Calculate the current financial year start and end dates
 today = datetime.today()
