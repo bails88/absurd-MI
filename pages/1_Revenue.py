@@ -9,16 +9,17 @@ st.title("Revenue")
 
 # 1. Retrieve GCP credentials from Streamlit secrets
 credentials_dict = {
-    "type": st.secrets["gcp"]["type"],
-    "project_id": st.secrets["gcp"]["project_id"],
-    "private_key_id": st.secrets["gcp"]["private_key_id"],
-    "private_key": st.secrets["gcp"]["private_key"],
-    "client_email": st.secrets["gcp"]["client_email"],
-    "client_id": st.secrets["gcp"]["client_id"],
-    "auth_uri": st.secrets["gcp"]["auth_uri"],
-    "token_uri": st.secrets["gcp"]["token_uri"],
-    "auth_provider_x509_cert_url": st.secrets["gcp"]["auth_provider_x509_cert_url"],
-    "client_x509_cert_url": st.secrets["gcp"]["client_x509_cert_url"]
+    "type": os.environ["type"],
+    "project_id": os.environ["project_id"],
+    "private_key_id": os.environ["private_key_id"],
+    "private_key": os.environ["private_keyY"],
+    "client_email": os.environ["client_email"],
+    "client_id": os.environ["client_id"],
+    "auth_uri": os.environ["auth_uri"],
+    "token_uri": os.environ["token_uri"],
+    "auth_provider_x509_cert_url": os.environ["auth_provider_x509_cert_url"],
+    "client_x509_cert_url": os.environ["client_x509_cert_url"]
+}
 }
 
 # 2. Create a BigQuery client from service account info
