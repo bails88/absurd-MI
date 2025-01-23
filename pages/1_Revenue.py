@@ -31,9 +31,10 @@ if today.month >= 10:
 else:
     start_of_financial_year = datetime(today.year - 1, 10, 1)
 
-end_of_financial_year = today  # up to today
+end_of_financial_year = today  # up to 'today'
 
 # Previous year's equivalent range
+import pandas as pd
 start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
 end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
@@ -43,7 +44,7 @@ end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
 prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
 prev_end_date_str = end_of_previous_financial_year.strftime('%Y-%m-%d')
 
-# 4. Queries for monthly totals
+# --- A) Queries for monthly totals ---
 current_query = f"""
 SELECT 
     FORMAT_TIMESTAMP('%Y-%m', issue_date) AS month,
@@ -76,7 +77,7 @@ ORDER BY
     month ASC;
 """
 
-# 5. Queries for client-level data
+# --- B) Queries for client-level data ---
 current_clients_query = f"""
 SELECT
   client.name AS client_name,
@@ -110,17 +111,19 @@ ORDER BY
 """
 
 try:
-    # --- A) Monthly Totals for Chart & Metrics ---
+    # --- 1) Monthly Totals for Chart & Metrics ---
     # Current year
     current_rows = list(client.query(current_query))
     current_data = pd.DataFrame([dict(row) for row in current_rows])
     current_data['month'] = pd.to_datetime(current_data['month'], format='%Y-%m')
+
     # Fill missing months
     months_in_fy = pd.date_range(start=start_of_financial_year, end=end_of_financial_year, freq="MS")
     months_df = pd.DataFrame({
         "month": months_in_fy,
         "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
     })
+
     current_data = months_df.merge(current_data, on='month', how='left')
     current_data['total_amount'] = current_data['total_amount'].fillna(0)
     current_data = current_data.sort_values(by='month')
@@ -131,14 +134,14 @@ try:
     previous_data = pd.DataFrame([dict(row) for row in previous_rows])
     total_invoiced_previous = previous_data['total_amount'].sum()
 
-    # % difference
+    # YOY % difference for metrics
     if total_invoiced_previous == 0:
         percent_diff = 0.0
     else:
         diff = total_invoiced_current - total_invoiced_previous
         percent_diff = (diff / total_invoiced_previous) * 100
 
-    # --- B) Client-Level Data for Table ---
+    # --- 2) Client-Level Data for Table ---
     current_clients_rows = list(client.query(current_clients_query))
     prev_clients_rows = list(client.query(previous_clients_query))
 
@@ -146,29 +149,31 @@ try:
     prev_clients_df = pd.DataFrame([dict(row) for row in prev_clients_rows])
 
     # Merge on client_name
-    clients_merged = pd.merge(
-        current_clients_df, 
-        prev_clients_df,
-        on='client_name',
-        how='outer'
-    ).fillna(0)
+    clients_merged = pd.merge(current_clients_df, prev_clients_df, on='client_name', how='outer').fillna(0)
 
-    # Calculate difference
-    clients_merged['difference'] = clients_merged['revenue_current'] - clients_merged['revenue_previous']
+    # Convert the numeric difference into a % difference
+    # ((revenue_current - revenue_previous) / revenue_previous) * 100
+    # If revenue_previous is 0, set % difference to 0
+    def calc_percentage_diff(row):
+        if row["revenue_previous"] == 0:
+            return 0.0
+        return ((row["revenue_current"] - row["revenue_previous"]) / row["revenue_previous"]) * 100
 
-    # Rename columns to match your desired output
+    clients_merged["% Difference"] = clients_merged.apply(calc_percentage_diff, axis=1)
+
+    # Rename columns for final display
     clients_merged.rename(columns={
         'client_name': 'Client name',
         'revenue_current': 'Revenue YTD',
-        'revenue_previous': 'Revenue previous YTD',
-        'difference': 'Difference'
+        'revenue_previous': 'Revenue previous YTD'
     }, inplace=True)
 
-    # Sort table by largest difference
-    clients_merged = clients_merged.sort_values(by='Difference', ascending=False)
+    # Sort by largest YTD revenue
+    clients_merged.sort_values(by='Revenue YTD', ascending=False, inplace=True)
 
-    # --- C) Display UI ---
-    # Metrics row
+    # --- 3) Display UI ---
+
+    # A) Metrics Row
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(
@@ -186,10 +191,10 @@ try:
             value=f"{percent_diff:,.1f}%",
         )
 
-    # Add vertical padding between metrics and chart
-    st.write("")  # or st.write("##") for bigger spacing, or st.divider()
-    
-    # Chart
+    # B) Vertical padding between metrics and chart
+    st.write("")
+
+    # C) Chart
     chart = alt.Chart(current_data).mark_bar().encode(
         x=alt.X('month_label:N', title="Month", sort=list(current_data['month_label'])),
         y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
@@ -204,9 +209,9 @@ try:
     )
     st.altair_chart(chart, use_container_width=True)
 
-    # Table below the chart
+    # D) Table
     st.subheader("Revenue by Client")
-    st.dataframe(clients_merged)
+    st.dataframe(clients_merged[["Client name", "Revenue YTD", "Revenue previous YTD", "% Difference"]])
 
 except Exception as e:
     st.error(f"An error occurred: {str(e)}")
