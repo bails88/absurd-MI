@@ -1,6 +1,7 @@
 streamlit>=1.18.0
-google-cloud-bigquery
-pandas
+google-cloud-bigquery==3.3.0
+pandas==1.5.3
 db_dtypes
 gcsfs
 st-files-connection
+altair==4.2.2

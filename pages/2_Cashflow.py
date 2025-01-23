@@ -7,13 +7,6 @@ import altair as alt
 from datetime import datetime
 from google.cloud import bigquery
 
-# Front Matter for custom page title with emoji
-# ---
-# title: "Cashflow 💸"
-# ---
-
-# Cache data loading functions
-@st.cache_data(ttl=600)
 def load_day_by_day_data(credentials_info, start_date):
     """
     Return day-by-day sums of 'due_amount' and 'tax_amount' from 1 Oct onward.
@@ -38,8 +31,6 @@ def load_day_by_day_data(credentials_info, start_date):
     rows = list(job)
     df = pd.DataFrame([dict(r) for r in rows])
     return df
-
-@st.cache_data(ttl=600)
 
 def load_month_by_month_data(credentials_info, start_date):
     """
