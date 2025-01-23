@@ -171,16 +171,22 @@ try:
 
     # 3) Dashboard: Metrics
     col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(
-            label=f"Current (1 Oct - {end_of_financial_year.strftime('%d %b %Y')})",
-            value=f"£{total_invoiced_current:,.2f}",
-        )
-    with col2:
-        st.metric(
-            label=f"Previous (1 Oct - {start_of_previous_financial_year.strftime('%d %b %Y')})",
-            value=f"£{total_invoiced_previous:,.2f}",
-        )
+    # Existing lines for the first metric (current)
+with col1:
+    st.metric(
+        label=f"Current (1 Oct - {end_of_financial_year.strftime('%d %b %Y')})",
+        value=f"£{total_invoiced_current:,.2f}",
+    )
+    # UPDATED lines for the second metric (previous)
+with col2:
+    st.metric(
+        label=(
+            f"Previous ("
+            f"{start_of_previous_financial_year.strftime('%d %b %Y')} - "
+            f"{end_of_previous_financial_year.strftime('%d %b %Y')})"
+        ),
+        value=f"£{total_invoiced_previous:,.2f}",
+    )
     with col3:
         st.metric("YOY % Change", f"{percent_diff:,.1f}%")
 
