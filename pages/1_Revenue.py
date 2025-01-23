@@ -1,9 +1,9 @@
 import os
-from google.cloud import bigquery
 import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import datetime
+from google.cloud import bigquery
 
 st.title("Revenue")
 
@@ -22,7 +22,6 @@ credentials_dict = {
 }
 
 # 2. Create a BigQuery client from service account info
-from google.cloud import bigquery
 client = bigquery.Client.from_service_account_info(credentials_dict)
 
 # 3. Calculate financial year range: 1st October to 'today'
@@ -31,12 +30,13 @@ if today.month >= 10:
     start_of_financial_year = datetime(today.year, 10, 1)
 else:
     start_of_financial_year = datetime(today.year - 1, 10, 1)
-
 end_of_financial_year = today
 
+# Previous year's range
 start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
 end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
+# Convert date ranges to strings
 start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
 end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
 prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
@@ -120,6 +120,7 @@ try:
         "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
     })
 
+    # Merge & fill missing months
     current_data = months_df.merge(current_data, on='month', how='left')
     current_data['total_amount'] = current_data['total_amount'].fillna(0)
     current_data = current_data.sort_values(by='month')
@@ -127,6 +128,7 @@ try:
     total_invoiced_current = current_data['total_amount'].sum()
     total_invoiced_previous = previous_data['total_amount'].sum() if not previous_data.empty else 0
 
+    # % difference for dashboard metric
     if total_invoiced_previous == 0:
         percent_diff = 0.0
     else:
@@ -138,13 +140,13 @@ try:
     prev_clients_df = pd.DataFrame([dict(row) for row in client.query(previous_clients_query)])
     clients_merged = pd.merge(current_clients_df, prev_clients_df, on='client_name', how='outer').fillna(0)
 
-    # a) Calculate the difference in £
+    # a) Calculate £ difference
     clients_merged["Difference"] = clients_merged["revenue_current"] - clients_merged["revenue_previous"]
 
     # b) Calculate % difference
     def calc_percentage_diff(row):
         if row["revenue_previous"] == 0:
-            return None  # We'll show '-' for zero previous
+            return None
         return ((row["revenue_current"] - row["revenue_previous"]) / row["revenue_previous"]) * 100
     clients_merged["% Difference"] = clients_merged.apply(calc_percentage_diff, axis=1)
 
@@ -171,27 +173,32 @@ try:
 
     # 3) Dashboard: Metrics
     col1, col2, col3 = st.columns(3)
-    # Existing lines for the first metric (current)
-with col1:
-    st.metric(
-        label=f"Current (1 Oct - {end_of_financial_year.strftime('%d %b %Y')})",
-        value=f"£{total_invoiced_current:,.2f}",
-    )
-    # UPDATED lines for the second metric (previous)
-with col2:
-    st.metric(
-        label=(
-            f"Previous ("
-            f"{start_of_previous_financial_year.strftime('%d %b %Y')} - "
-            f"{end_of_previous_financial_year.strftime('%d %b %Y')})"
-        ),
-        value=f"£{total_invoiced_previous:,.2f}",
-    )
+
+    # Current metric
+    with col1:
+        st.metric(
+            label=f"Current ({start_of_financial_year.strftime('%d %b %Y')} - {end_of_financial_year.strftime('%d %b %Y')})",
+            value=f"£{total_invoiced_current:,.2f}",
+        )
+
+    # Previous metric (FIX: show correct range)
+    with col2:
+        st.metric(
+            label=(
+                f"Previous ("
+                f"{start_of_previous_financial_year.strftime('%d %b %Y')} - "
+                f"{end_of_previous_financial_year.strftime('%d %b %Y')})"
+            ),
+            value=f"£{total_invoiced_previous:,.2f}",
+        )
+
+    # % difference metric
     with col3:
         st.metric("YOY % Change", f"{percent_diff:,.1f}%")
 
     st.write("")  # spacing
 
+    # 4) Chart
     chart = alt.Chart(current_data).mark_bar().encode(
         x=alt.X('month_label:N', title="Month", sort=list(current_data['month_label'])),
         y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
@@ -208,11 +215,11 @@ with col2:
 
     st.subheader("Revenue by Client")
 
-    # 4) Build table: now has Difference + % Difference columns
+    # 5) Build Table: now has Difference + % Difference columns
     display_columns = ["Client name", "Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
     df_for_styling = clients_merged[display_columns].copy()
 
-    # 4a) Format currency with parentheses for negative amounts
+    # Accountancy-style currency formatting
     def accountancy_format(val):
         """Format negative numbers in parentheses, else normal. Two decimals, currency sign."""
         if not isinstance(val, (int, float)):
@@ -221,7 +228,7 @@ with col2:
             return f"(£{abs(val):,.2f})"
         return f"£{val:,.2f}"
 
-    # 4b) Conditional styling for color
+    # Conditional styling for negative/positive
     def highlight_vals(val):
         """Color negative red, positive green, else default."""
         if val is None or not isinstance(val, (float, int)):
@@ -232,7 +239,6 @@ with col2:
             return "color: green"
         return ""
 
-    # 4c) Build the Styler
     styled_df = df_for_styling.style \
         .format(
             {
@@ -245,17 +251,14 @@ with col2:
         .applymap(highlight_vals, subset=["Difference"]) \
         .applymap(highlight_vals, subset=["% Difference"])
 
-    # 4d) Right-align numeric columns
+    # Right-align numeric columns
     numeric_cols = ["Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
     styled_df.set_properties(**{"text-align": "right"}, subset=numeric_cols)
 
-    # 4e) Thicker top border & bold text for last row (the totals row)
+    # Thicker top border & bold text for last row (the totals row)
     styled_df.set_table_styles([
-        # Hide index with older Pandas approach
         {"selector": "th.row_heading", "props": [("display", "none")]},
         {"selector": "th.blank", "props": [("display", "none")]},
-
-        # Bold last row + thick top border
         {
             "selector": "tbody tr:last-child",
             "props": [
