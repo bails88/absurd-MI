@@ -74,7 +74,7 @@ def main():
         cashflow_df['total_amount'] = []
 
     st.write("## Cashflow by day")
-    st.write(f"Showing all invoice line-item amounts by `due_date`, starting from {start_date_str} onward.")
+    st.write(f"Showing all invoice line-item amounts by `due_date`, starting from {start_date_str} onward. Please note this excludes VAT, so receivables will be higher.")
 
     # 5. Day-by-day line chart
     if cashflow_df.empty:
