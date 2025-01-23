@@ -34,7 +34,6 @@ else:
 
 end_of_financial_year = today  # up to 'today'
 
-import pandas as pd
 start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
 end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
@@ -156,10 +155,9 @@ try:
     ).fillna(0)
 
     # Convert numeric difference into a % difference for the table
-    # If 'revenue_previous' is 0, fallback to 0%
     def calc_percentage_diff(row):
         if row["revenue_previous"] == 0:
-            return 0.0
+            return None  # We'll display a dash instead of 0%
         return ((row["revenue_current"] - row["revenue_previous"]) / row["revenue_previous"]) * 100
 
     clients_merged["% Difference"] = clients_merged.apply(calc_percentage_diff, axis=1)
@@ -173,6 +171,17 @@ try:
 
     # Sort by largest YTD revenue
     clients_merged.sort_values(by='Revenue YTD', ascending=False, inplace=True)
+
+    # (A) Insert totals row at bottom
+    # We'll match the top-level metrics:
+    totals_row = {
+        'Client name': 'Total',
+        'Revenue YTD': total_invoiced_current,
+        'Revenue previous YTD': total_invoiced_previous,
+        '% Difference': percent_diff  # matches the third metric exactly
+    }
+    # Use concat or append to place this row at the end
+    clients_merged = pd.concat([clients_merged, pd.DataFrame([totals_row])], ignore_index=True)
 
     # --- 3) Display UI ---
 
@@ -215,30 +224,29 @@ try:
     # D) Table (Styled with Pandas Styler)
     st.subheader("Revenue by Client")
 
-    # 1. Subset columns
     display_columns = ["Client name", "Revenue YTD", "Revenue previous YTD", "% Difference"]
-
-    # 2. Create a copy for styling
     df_for_styling = clients_merged[display_columns].copy()
 
-    # 3. Build a Pandas Styler
+    # Conditional styling function for % Difference
     def highlight_diff(val):
         """Color % green if positive, red if negative."""
-        if not isinstance(val, (float, int)):
+        # If it's None or not numeric, do nothing
+        if val is None or not isinstance(val, (float, int)):
             return ""
         return "color: green" if val > 0 else ("color: red" if val < 0 else "")
 
-    styled_df = df_for_styling.style.format(
-        {
+    # 1) For None values in "% Difference", we want to show '-'
+    # 2) Convert numeric to one decimal place + '%'
+    # 3) Currency formatting for 'Revenue YTD' and 'Revenue previous YTD'
+    styled_df = df_for_styling.style \
+        .hide_index() \
+        .format({
             "Revenue YTD": "£{:,.2f}",
             "Revenue previous YTD": "£{:,.2f}",
-            "% Difference": "{:,.1f}%"
-        }
-    ).applymap(
-        highlight_diff, subset=["% Difference"]
-    )
+            "% Difference": lambda x: "-" if pd.isnull(x) else f"{x:,.1f}%"
+        }) \
+        .applymap(highlight_diff, subset=["% Difference"])
 
-    # 4. Display as styled HTML
     st.write(styled_df.to_html(), unsafe_allow_html=True)
 
 except Exception as e:
