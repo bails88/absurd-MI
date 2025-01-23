@@ -1,4 +1,4 @@
-streamlit
+streamlit>=1.18.0
 google-cloud-bigquery
 pandas
 db_dtypes

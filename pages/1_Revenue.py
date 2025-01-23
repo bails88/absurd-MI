@@ -1,3 +1,5 @@
+# pages/2_Cashflow.py
+
 import os
 import streamlit as st
 import pandas as pd
@@ -5,270 +7,171 @@ import altair as alt
 from datetime import datetime
 from google.cloud import bigquery
 
-st.title("Revenue")
+# Front Matter for custom page title with emoji
+# ---
+# title: "Cashflow 💸"
+# ---
 
-# 1. Retrieve Render Env Variables Group
-credentials_dict = {
-    "type": os.environ["type"],
-    "project_id": os.environ["project_id"],
-    "private_key_id": os.environ["private_key_id"],
-    "private_key": os.environ["private_key"],
-    "client_email": os.environ["client_email"],
-    "client_id": os.environ["client_id"],
-    "auth_uri": os.environ["auth_uri"],
-    "token_uri": os.environ["token_uri"],
-    "auth_provider_x509_cert_url": os.environ["auth_provider_x509_cert_url"],
-    "client_x509_cert_url": os.environ["client_x509_cert_url"]
-}
+# Cache data loading functions
+@st.cache_data
+def load_day_by_day_data(credentials_info, start_date):
+    """
+    Return day-by-day sums of 'due_amount' and 'tax_amount' from 1 Oct onward.
+    """
+    print("Fetching day-by-day data from BigQuery...")
+    client = bigquery.Client.from_service_account_info(credentials_info)
+    query = f"""
+    SELECT
+      due_date,
+      SUM(due_amount) + SUM(tax_amount) AS total_amount
+    FROM
+      `marketing-434610.harvest.Invoices`
+    WHERE
+      due_date >= '{start_date}'
+      AND state IN ('open', 'paid', 'draft')
+    GROUP BY
+      due_date
+    ORDER BY
+      due_date ASC
+    """
+    job = client.query(query)
+    rows = list(job)
+    df = pd.DataFrame([dict(r) for r in rows])
+    return df
 
-# 2. Create a BigQuery client from service account info
-client = bigquery.Client.from_service_account_info(credentials_dict)
+@st.cache_data
+def load_month_by_month_data(credentials_info, start_date):
+    """
+    Return month-year sums of 'due_amount' and 'tax_amount' from 1 Oct onward
+    to pivot into columns.
+    """
+    print("Fetching month-by-month data from BigQuery...")
+    client = bigquery.Client.from_service_account_info(credentials_info)
+    query = f"""
+    SELECT
+      FORMAT_TIMESTAMP('%Y-%m', due_date) AS month_year,
+      SUM(due_amount) + SUM(tax_amount) AS total_amount
+    FROM
+      `marketing-434610.harvest.Invoices`
+    WHERE
+      due_date >= '{start_date}'
+      AND state IN ('open', 'paid', 'draft')
+    GROUP BY
+      month_year
+    ORDER BY
+      month_year ASC
+    """
+    job = client.query(query)
+    rows = list(job)
+    df = pd.DataFrame([dict(r) for r in rows])
+    return df
 
-# 3. Calculate financial year range: 1st October to 'today'
-today = datetime.today()
-if today.month >= 10:
-    start_of_financial_year = datetime(today.year, 10, 1)
-else:
-    start_of_financial_year = datetime(today.year - 1, 10, 1)
-end_of_financial_year = today
+def main():
+    # Set page configuration with emoji and wide layout
+    st.set_page_config(page_title="Cashflow 💸", layout="wide")
+    
+    st.title("Cashflow 💸")
 
-# Previous year's range
-start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
-end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
-
-# Convert date ranges to strings
-start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
-end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
-prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
-prev_end_date_str = end_of_previous_financial_year.strftime('%Y-%m-%d')
-
-# --- A) Queries for monthly totals ---
-current_query = f"""
-SELECT 
-    FORMAT_TIMESTAMP('%Y-%m', issue_date) AS month,
-    SUM(line_item.amount) AS total_amount
-FROM 
-    `marketing-434610.harvest.Invoices`,
-    UNNEST(line_items) AS line_item
-WHERE 
-    issue_date BETWEEN '{start_date_str}' AND '{end_date_str}'
-    AND state IN ('open', 'paid', 'draft')
-GROUP BY 
-    month
-ORDER BY 
-    month ASC;
-"""
-
-previous_query = f"""
-SELECT 
-    FORMAT_TIMESTAMP('%Y-%m', issue_date) AS month,
-    SUM(line_item.amount) AS total_amount
-FROM 
-    `marketing-434610.harvest.Invoices`,
-    UNNEST(line_items) AS line_item
-WHERE 
-    issue_date BETWEEN '{prev_start_date_str}' AND '{prev_end_date_str}'
-    AND state IN ('open', 'paid', 'draft')
-GROUP BY 
-    month
-ORDER BY 
-    month ASC;
-"""
-
-# --- B) Queries for client-level data ---
-current_clients_query = f"""
-SELECT
-  client.name AS client_name,
-  SUM(line_item.amount) AS revenue_current
-FROM
-  `marketing-434610.harvest.Invoices`,
-  UNNEST(line_items) AS line_item
-WHERE
-  issue_date BETWEEN '{start_date_str}' AND '{end_date_str}'
-  AND state IN ('open', 'paid', 'draft')
-GROUP BY
-  client_name
-ORDER BY
-  client_name;
-"""
-
-previous_clients_query = f"""
-SELECT
-  client.name AS client_name,
-  SUM(line_item.amount) AS revenue_previous
-FROM
-  `marketing-434610.harvest.Invoices`,
-  UNNEST(line_items) AS line_item
-WHERE
-  issue_date BETWEEN '{prev_start_date_str}' AND '{prev_end_date_str}'
-  AND state IN ('open', 'paid', 'draft')
-GROUP BY
-  client_name
-ORDER BY
-  client_name;
-"""
-
-try:
-    # 1) Monthly Totals for Chart & Metrics
-    current_data = pd.DataFrame([dict(row) for row in client.query(current_query)])
-    previous_data = pd.DataFrame([dict(row) for row in client.query(previous_query)])
-
-    current_data['month'] = pd.to_datetime(current_data['month'], format='%Y-%m')
-    months_in_fy = pd.date_range(start=start_of_financial_year, end=end_of_financial_year, freq="MS")
-    months_df = pd.DataFrame({
-        "month": months_in_fy,
-        "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
-    })
-
-    # Merge & fill missing months
-    current_data = months_df.merge(current_data, on='month', how='left')
-    current_data['total_amount'] = current_data['total_amount'].fillna(0)
-    current_data = current_data.sort_values(by='month')
-
-    total_invoiced_current = current_data['total_amount'].sum()
-    total_invoiced_previous = previous_data['total_amount'].sum() if not previous_data.empty else 0
-
-    # % difference for dashboard metric
-    if total_invoiced_previous == 0:
-        percent_diff = 0.0
-    else:
-        diff = total_invoiced_current - total_invoiced_previous
-        percent_diff = (diff / total_invoiced_previous) * 100
-
-    # 2) Client-Level Data
-    current_clients_df = pd.DataFrame([dict(row) for row in client.query(current_clients_query)])
-    prev_clients_df = pd.DataFrame([dict(row) for row in client.query(previous_clients_query)])
-    clients_merged = pd.merge(current_clients_df, prev_clients_df, on='client_name', how='outer').fillna(0)
-
-    # a) Calculate £ difference
-    clients_merged["Difference"] = clients_merged["revenue_current"] - clients_merged["revenue_previous"]
-
-    # b) Calculate % difference
-    def calc_percentage_diff(row):
-        if row["revenue_previous"] == 0:
-            return None
-        return ((row["revenue_current"] - row["revenue_previous"]) / row["revenue_previous"]) * 100
-    clients_merged["% Difference"] = clients_merged.apply(calc_percentage_diff, axis=1)
-
-    # c) Rename columns
-    clients_merged.rename(columns={
-        'client_name': 'Client name',
-        'revenue_current': 'Revenue YTD',
-        'revenue_previous': 'Revenue previous YTD'
-    }, inplace=True)
-
-    # d) Sort by largest YTD revenue
-    clients_merged.sort_values(by='Revenue YTD', ascending=False, inplace=True)
-
-    # e) Insert Totals row
-    total_difference = total_invoiced_current - total_invoiced_previous
-    totals_row = {
-        'Client name': 'Total',
-        'Revenue YTD': total_invoiced_current,
-        'Revenue previous YTD': total_invoiced_previous,
-        'Difference': total_difference,
-        '% Difference': percent_diff
+    # 1. Load credentials from environment variables
+    credentials_dict = {
+        "type": os.environ.get("GCP_TYPE"),
+        "project_id": os.environ.get("GCP_PROJECT_ID"),
+        "private_key_id": os.environ.get("GCP_PRIVATE_KEY_ID"),
+        "private_key": os.environ.get("GCP_PRIVATE_KEY"),
+        "client_email": os.environ.get("GCP_CLIENT_EMAIL"),
+        "client_id": os.environ.get("GCP_CLIENT_ID"),
+        "auth_uri": os.environ.get("GCP_AUTH_URI"),
+        "token_uri": os.environ.get("GCP_TOKEN_URI"),
+        "auth_provider_x509_cert_url": os.environ.get("GCP_AUTH_PROVIDER_X509_CERT_URL"),
+        "client_x509_cert_url": os.environ.get("GCP_CLIENT_X509_CERT_URL")
     }
-    clients_merged = pd.concat([clients_merged, pd.DataFrame([totals_row])], ignore_index=True)
 
-    # 3) Dashboard: Metrics
-    col1, col2, col3 = st.columns(3)
+    # 1a. Validate that all credentials are present
+    missing_vars = [key for key, value in credentials_dict.items() if value is None]
+    if missing_vars:
+        st.error(f"Missing environment variables: {', '.join(missing_vars)}")
+        return
 
-    # Current metric
-    with col1:
-        st.metric(
-            label=f"Current ({start_of_financial_year.strftime('%d %b %Y')} - {end_of_financial_year.strftime('%d %b %Y')})",
-            value=f"£{total_invoiced_current:,.2f}",
-        )
+    # 2. Determine the start of the current financial year
+    today = datetime.today()
+    if today.month >= 10:
+        start_of_financial_year = datetime(today.year, 10, 1)
+    else:
+        start_of_financial_year = datetime(today.year - 1, 10, 1)
+    start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
 
-    # Previous metric (FIX: show correct range)
-    with col2:
-        st.metric(
-            label=(
-                f"Previous ("
-                f"{start_of_previous_financial_year.strftime('%d %b %Y')} - "
-                f"{end_of_previous_financial_year.strftime('%d %b %Y')})"
-            ),
-            value=f"£{total_invoiced_previous:,.2f}",
-        )
+    st.markdown(f"**Data from {start_date_str} onwards, day by day, using `due_date` and summing `due_amount` and `tax_amount`.**")
 
-    # % difference metric
-    with col3:
-        st.metric("YOY % Change", f"{percent_diff:,.1f}%")
+    # 3. Load day-by-day data from BigQuery with caching
+    with st.spinner("Loading day-by-day cashflow data..."):
+        day_df = load_day_by_day_data(credentials_dict, start_date_str)
 
-    st.write("")  # spacing
+    # 4. Convert 'due_date' to datetime
+    if not day_df.empty:
+        day_df['due_date'] = pd.to_datetime(day_df['due_date'])
+    else:
+        # Create empty DataFrame with correct columns
+        day_df = pd.DataFrame(columns=['due_date', 'total_amount'])
 
-    # 4) Chart
-    chart = alt.Chart(current_data).mark_bar().encode(
-        x=alt.X('month_label:N', title="Month", sort=list(current_data['month_label'])),
-        y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
-        tooltip=[
-            alt.Tooltip('month_label:N', title='Month'),
-            alt.Tooltip('total_amount:Q', title='Total Invoiced (£)', format=',.2f')
-        ]
-    ).properties(
-        title="Invoiced Amount by Month (From 1st Oct to Today)",
-        width="container",
-        height=400
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-    st.subheader("Revenue by Client")
-
-    # 5) Build Table: now has Difference + % Difference columns
-    display_columns = ["Client name", "Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
-    df_for_styling = clients_merged[display_columns].copy()
-
-    # Accountancy-style currency formatting
-    def accountancy_format(val):
-        """Format negative numbers in parentheses, else normal. Two decimals, currency sign."""
-        if not isinstance(val, (int, float)):
-            return val
-        if val < 0:
-            return f"(£{abs(val):,.2f})"
-        return f"£{val:,.2f}"
-
-    # Conditional styling for negative/positive
-    def highlight_vals(val):
-        """Color negative red, positive green, else default."""
-        if val is None or not isinstance(val, (float, int)):
-            return ""
-        if val < 0:
-            return "color: red"
-        elif val > 0:
-            return "color: green"
-        return ""
-
-    styled_df = df_for_styling.style \
-        .format(
-            {
-                "Revenue YTD": accountancy_format,
-                "Revenue previous YTD": accountancy_format,
-                "Difference": accountancy_format,
-                "% Difference": lambda x: "-" if pd.isnull(x) else f"{x:,.1f}%"
-            }
-        ) \
-        .applymap(highlight_vals, subset=["Difference"]) \
-        .applymap(highlight_vals, subset=["% Difference"])
-
-    # Right-align numeric columns
-    numeric_cols = ["Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
-    styled_df.set_properties(**{"text-align": "right"}, subset=numeric_cols)
-
-    # Thicker top border & bold text for last row (the totals row)
-    styled_df.set_table_styles([
-        {"selector": "th.row_heading", "props": [("display", "none")]},
-        {"selector": "th.blank", "props": [("display", "none")]},
-        {
-            "selector": "tbody tr:last-child",
-            "props": [
-                ("font-weight", "bold"),
-                ("border-top", "3px solid black")
+    # 5. Day-by-day line chart
+    if day_df.empty:
+        st.info("No cashflow data found after 1 Oct.")
+    else:
+        chart = alt.Chart(day_df).mark_line(
+            point=alt.OverlayMarkDef(color='#FF4B4B'),  # red color for points
+            color='#FF4B4B'  # red line (Streamlit brand color)
+        ).encode(
+            x=alt.X('due_date:T', title="Due Date (Daily)"),
+            y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
+            tooltip=[
+                alt.Tooltip('due_date:T', title='Due Date'),
+                alt.Tooltip('total_amount:Q', title='Total Invoiced (£)', format=',.2f')
             ]
-        }
-    ], overwrite=False)
+        ).properties(
+            width="container",
+            height=400
+        )
+        st.altair_chart(chart, use_container_width=True)
 
-    st.write(styled_df.to_html(), unsafe_allow_html=True)
+    # 6. Load month-by-month data with caching
+    with st.spinner("Loading month-by-month cashflow data..."):
+        month_df = load_month_by_month_data(credentials_dict, start_date_str)
 
-except Exception as e:
-    st.error(f"An error occurred: {str(e)}")
+    # 7. Process month-by-month data
+    if not month_df.empty:
+        # Convert "2023-01" to datetime, then to "Jan-2023"
+        month_df['month_year'] = pd.to_datetime(month_df['month_year'], format='%Y-%m')
+        month_df['month_label'] = month_df['month_year'].dt.strftime('%b-%Y')
+    else:
+        # Create empty DataFrame with correct columns
+        month_df = pd.DataFrame(columns=['month_year', 'total_amount'])
+
+    # 8. Display month-by-month pivot table
+    st.subheader("Month-by-Month Totals")
+
+    if month_df.empty:
+        st.info("No monthly data found.")
+    else:
+        # Pivot so each month_label is a column, single row
+        pivot_table = month_df.pivot_table(
+            index=[],  # no row index
+            columns='month_label',
+            values='total_amount',
+            aggfunc='sum',
+            fill_value=0
+        )
+
+        # Optional: Keep only the last 12 months
+        # pivot_table = pivot_table.iloc[:, -12:]
+
+        # Hide the index
+        pivot_table = pivot_table.reset_index(drop=True)
+
+        # Format as currency
+        pivot_table = pivot_table.applymap(lambda x: f"£{x:,.2f}")
+
+        # Display the table without an index
+        st.table(pivot_table)
+
+if __name__ == "__main__":
+    main()
