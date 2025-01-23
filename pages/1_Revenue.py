@@ -20,7 +20,6 @@ credentials_dict = {
     "auth_provider_x509_cert_url": os.environ["auth_provider_x509_cert_url"],
     "client_x509_cert_url": os.environ["client_x509_cert_url"]
 }
-}
 
 # 2. Create a BigQuery client from service account info
 client = bigquery.Client.from_service_account_info(credentials_dict)
