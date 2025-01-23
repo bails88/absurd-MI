@@ -1,3 +1,5 @@
+# pages/2_Cashflow.py (example name)
+
 import os
 import streamlit as st
 import pandas as pd
@@ -26,19 +28,20 @@ def load_cashflow_data(client, start_date):
     No upper bound, so any future due dates are included.
     """
     query = f"""
-SELECT
-  due_date,
-  SUM(due_amount) AS total_amount
-FROM
-  `marketing-434610.harvest.Invoices`
-WHERE
-  due_date >= '{start_date}'
-  AND state IN ('open', 'paid', 'draft')
-GROUP BY
-  due_date
-ORDER BY
-  due_date ASC;
-"""
+    SELECT
+      due_date,
+      SUM(line_item.amount) AS total_amount
+    FROM
+      `marketing-434610.harvest.Invoices`,
+      UNNEST(line_items) AS line_item
+    WHERE
+      due_date >= '{start_date}'
+      AND state IN ('open', 'paid', 'draft')
+    GROUP BY
+      due_date
+    ORDER BY
+      due_date ASC
+    """
     job = client.query(query)
     rows = list(job)
     df = pd.DataFrame([dict(r) for r in rows])
@@ -72,27 +75,24 @@ def main():
         cashflow_df['due_date'] = []
         cashflow_df['total_amount'] = []
 
-    st.write("## Cashflow by day")
-    st.write(f"Showing all invoice line-item amounts by `due_date`, starting from {start_date_str} onward. Please note this excludes VAT, so receivables will be higher.")
+    st.write("## Cashflow by Day")
+    st.write(f"Showing all invoice line-item amounts by `due_date`, starting from {start_date_str} onward.")
 
     # 5. Day-by-day line chart
     if cashflow_df.empty:
         st.info("No cashflow data found after 1 Oct.")
     else:
-        chart = alt.Chart(cashflow_df).mark_line(
-    point=alt.OverlayMarkDef(color='#FF4B4B'),  # color for points
-    color='#FF4B4B'  # color for the line
-).encode(
-    x=alt.X('due_date:T', title="Due Date"),
-    y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
-    tooltip=[
-        alt.Tooltip('due_date:T', title='Due Date'),
-        alt.Tooltip('total_amount:Q', title='Total Invoiced (£)', format=',.2f')
-    ]
-).properties(
-    width="container",
-    height=400
-)
+        chart = alt.Chart(cashflow_df).mark_line(point=True).encode(
+            x=alt.X('due_date:T', title="Due Date"),
+            y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
+            tooltip=[
+                alt.Tooltip('due_date:T', title='Due Date'),
+                alt.Tooltip('total_amount:Q', title='Total Invoiced (£)', format=',.2f')
+            ]
+        ).properties(
+            width="container",
+            height=400
+        )
         st.altair_chart(chart, use_container_width=True)
 
 if __name__ == "__main__":
