@@ -22,6 +22,7 @@ credentials_dict = {
 }
 
 # 2. Create a BigQuery client from service account info
+from google.cloud import bigquery
 client = bigquery.Client.from_service_account_info(credentials_dict)
 
 # 3. Calculate financial year range: 1st October to 'today'
@@ -33,12 +34,10 @@ else:
 
 end_of_financial_year = today  # up to 'today'
 
-# Previous year's equivalent range
 import pandas as pd
 start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
 end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
-# Convert to strings for queries
 start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
 end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
 prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
@@ -149,11 +148,15 @@ try:
     prev_clients_df = pd.DataFrame([dict(row) for row in prev_clients_rows])
 
     # Merge on client_name
-    clients_merged = pd.merge(current_clients_df, prev_clients_df, on='client_name', how='outer').fillna(0)
+    clients_merged = pd.merge(
+        current_clients_df, 
+        prev_clients_df, 
+        on='client_name', 
+        how='outer'
+    ).fillna(0)
 
-    # Convert the numeric difference into a % difference
-    # ((revenue_current - revenue_previous) / revenue_previous) * 100
-    # If revenue_previous is 0, set % difference to 0
+    # Convert numeric difference into a % difference for the table
+    # If 'revenue_previous' is 0, fallback to 0%
     def calc_percentage_diff(row):
         if row["revenue_previous"] == 0:
             return 0.0
@@ -209,9 +212,34 @@ try:
     )
     st.altair_chart(chart, use_container_width=True)
 
-    # D) Table
+    # D) Table (Styled with Pandas Styler)
     st.subheader("Revenue by Client")
-    st.dataframe(clients_merged[["Client name", "Revenue YTD", "Revenue previous YTD", "% Difference"]])
+
+    # 1. Subset columns
+    display_columns = ["Client name", "Revenue YTD", "Revenue previous YTD", "% Difference"]
+
+    # 2. Create a copy for styling
+    df_for_styling = clients_merged[display_columns].copy()
+
+    # 3. Build a Pandas Styler
+    def highlight_diff(val):
+        """Color % green if positive, red if negative."""
+        if not isinstance(val, (float, int)):
+            return ""
+        return "color: green" if val > 0 else ("color: red" if val < 0 else "")
+
+    styled_df = df_for_styling.style.format(
+        {
+            "Revenue YTD": "£{:,.2f}",
+            "Revenue previous YTD": "£{:,.2f}",
+            "% Difference": "{:,.1f}%"
+        }
+    ).applymap(
+        highlight_diff, subset=["% Difference"]
+    )
+
+    # 4. Display as styled HTML
+    st.write(styled_df.to_html(), unsafe_allow_html=True)
 
 except Exception as e:
     st.error(f"An error occurred: {str(e)}")
