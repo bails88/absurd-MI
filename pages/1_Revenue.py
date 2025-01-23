@@ -4,10 +4,6 @@ import pandas as pd
 import altair as alt
 from datetime import datetime
 from google.cloud import bigquery
-import sidebar
-
-# First thing in the page
-sidebar.add_sidebar_logo()
 
 st.title("Revenue")
 
