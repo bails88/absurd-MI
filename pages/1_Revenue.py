@@ -119,6 +119,7 @@ try:
         "month": months_in_fy,
         "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
     })
+
     current_data = months_df.merge(current_data, on='month', how='left')
     current_data['total_amount'] = current_data['total_amount'].fillna(0)
     current_data = current_data.sort_values(by='month')
@@ -183,7 +184,7 @@ try:
     with col3:
         st.metric("YOY % Change", f"{percent_diff:,.1f}%")
 
-    st.write("")  # Spacing
+    st.write("")  # spacing
 
     chart = alt.Chart(current_data).mark_bar().encode(
         x=alt.X('month_label:N', title="Month", sort=list(current_data['month_label'])),
@@ -205,31 +206,46 @@ try:
     display_columns = ["Client name", "Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
     df_for_styling = clients_merged[display_columns].copy()
 
-    # Conditional styling for % difference
-    def highlight_diff(val):
+    # 4a) Format currency with parentheses for negative amounts
+    def accountancy_format(val):
+        """Format negative numbers in parentheses, else normal. Two decimals, currency sign."""
+        if not isinstance(val, (int, float)):
+            return val
+        if val < 0:
+            return f"(£{abs(val):,.2f})"
+        return f"£{val:,.2f}"
+
+    # 4b) Conditional styling for color
+    def highlight_vals(val):
+        """Color negative red, positive green, else default."""
         if val is None or not isinstance(val, (float, int)):
             return ""
-        return "color: green" if val > 0 else ("color: red" if val < 0 else "")
+        if val < 0:
+            return "color: red"
+        elif val > 0:
+            return "color: green"
+        return ""
 
-    # Format columns
-    styled_df = df_for_styling.style.format(
-        {
-            "Revenue YTD": "£{:,.2f}",
-            "Revenue previous YTD": "£{:,.2f}",
-            "Difference": "£{:,.2f}",
-            "% Difference": lambda x: "-" if pd.isnull(x) else f"{x:,.1f}%"
-        }
-    ).applymap(
-        highlight_diff, subset=["% Difference"]
-    )
+    # 4c) Build the Styler
+    styled_df = df_for_styling.style \
+        .format(
+            {
+                "Revenue YTD": accountancy_format,
+                "Revenue previous YTD": accountancy_format,
+                "Difference": accountancy_format,
+                "% Difference": lambda x: "-" if pd.isnull(x) else f"{x:,.1f}%"
+            }
+        ) \
+        .applymap(highlight_vals, subset=["Difference"]) \
+        .applymap(highlight_vals, subset=["% Difference"])
 
-    # Right-align numeric columns
+    # 4d) Right-align numeric columns
     numeric_cols = ["Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
     styled_df.set_properties(**{"text-align": "right"}, subset=numeric_cols)
 
-    # Thicker top border & bold text for last row (the totals row)
+    # 4e) Thicker top border & bold text for last row (the totals row)
     styled_df.set_table_styles([
-        # Hide index if needed (pandas < 1.4 workaround below)
+        # Hide index with older Pandas approach
         {"selector": "th.row_heading", "props": [("display", "none")]},
         {"selector": "th.blank", "props": [("display", "none")]},
 
