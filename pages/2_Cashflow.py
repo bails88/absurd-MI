@@ -80,17 +80,20 @@ def main():
     if cashflow_df.empty:
         st.info("No cashflow data found after 1 Oct.")
     else:
-        chart = alt.Chart(cashflow_df).mark_line(point=True).encode(
-            x=alt.X('due_date:T', title="Due Date"),
-            y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
-            tooltip=[
-                alt.Tooltip('due_date:T', title='Due Date'),
-                alt.Tooltip('total_amount:Q', title='Total Invoiced (£)', format=',.2f')
-            ]
-        ).properties(
-            width="container",
-            height=400
-        )
+        chart = alt.Chart(cashflow_df).mark_line(
+    point=alt.OverlayMarkDef(color='#FF4B4B'),  # color for points
+    color='#FF4B4B'  # color for the line
+).encode(
+    x=alt.X('due_date:T', title="Due Date"),
+    y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
+    tooltip=[
+        alt.Tooltip('due_date:T', title='Due Date'),
+        alt.Tooltip('total_amount:Q', title='Total Invoiced (£)', format=',.2f')
+    ]
+).properties(
+    width="container",
+    height=400
+)
         st.altair_chart(chart, use_container_width=True)
 
 if __name__ == "__main__":
