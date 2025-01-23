@@ -27,18 +27,17 @@ def load_cashflow_data(client, start_date):
     """
     query = f"""
     SELECT
-      due_date,
-      SUM(line_item.amount) AS total_amount
-    FROM
-      `marketing-434610.harvest.Invoices`,
-      UNNEST(line_items) AS line_item
-    WHERE
-      due_date >= '{start_date}'
-      AND state IN ('open', 'paid', 'draft')
-    GROUP BY
-      due_date
-    ORDER BY
-      due_date ASC
+  due_date,
+  SUM(due_amount) AS total_amount
+FROM
+  `marketing-434610.harvest.Invoices`
+WHERE
+  due_date >= '{start_date}'
+  AND state IN ('open', 'paid', 'draft')
+GROUP BY
+  due_date
+ORDER BY
+  due_date ASC
     """
     job = client.query(query)
     rows = list(job)
