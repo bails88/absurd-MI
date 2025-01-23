@@ -1,0 +1,10 @@
+services:
+  - name: Absurd MI
+    type: web
+    env: python
+    plan: free
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: streamlit run Home.py --server.port 10000 --server.address 0.0.0.0
+    # Above assumes your main script is "app.py"
+    # If it's something else (e.g. "Home.py"), update accordingly
+    healthCheckPath: /
