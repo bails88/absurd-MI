@@ -1,28 +1,27 @@
 import os
-from google.cloud import bigquery
 import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import datetime
+from google.cloud import bigquery
 
 st.title("Revenue")
 
-# 1. Retrieve GCP credentials from Streamlit secrets
+def load_credentials():
 credentials_dict = {
-    "type": st.secrets["gcp"]["type"],
-    "project_id": st.secrets["gcp"]["project_id"],
-    "private_key_id": st.secrets["gcp"]["private_key_id"],
-    "private_key": st.secrets["gcp"]["private_key"],
-    "client_email": st.secrets["gcp"]["client_email"],
-    "client_id": st.secrets["gcp"]["client_id"],
-    "auth_uri": st.secrets["gcp"]["auth_uri"],
-    "token_uri": st.secrets["gcp"]["token_uri"],
-    "auth_provider_x509_cert_url": st.secrets["gcp"]["auth_provider_x509_cert_url"],
-    "client_x509_cert_url": st.secrets["gcp"]["client_x509_cert_url"]
+        "type": os.environ["GCP_TYPE"],
+        "project_id": os.environ["GCP_PROJECT_ID"],
+        "private_key_id": os.environ["GCP_PRIVATE_KEY_ID"],
+        "private_key": os.environ["GCP_PRIVATE_KEY"],
+        "client_email": os.environ["GCP_CLIENT_EMAIL"],
+        "client_id": os.environ["GCP_CLIENT_ID"],
+        "auth_uri": os.environ["GCP_AUTH_URI"],
+        "token_uri": os.environ["GCP_TOKEN_URI"],
+        "auth_provider_x509_cert_url": os.environ["GCP_AUTH_PROVIDER_X509_CERT_URL"],
+        "client_x509_cert_url": os.environ["GCP_CLIENT_X509_CERT_URL"]
 }
 
 # 2. Create a BigQuery client from service account info
-from google.cloud import bigquery
 client = bigquery.Client.from_service_account_info(credentials_dict)
 
 # 3. Calculate financial year range: 1st October to 'today'
@@ -31,12 +30,13 @@ if today.month >= 10:
     start_of_financial_year = datetime(today.year, 10, 1)
 else:
     start_of_financial_year = datetime(today.year - 1, 10, 1)
+end_of_financial_year = today
 
-end_of_financial_year = today  # up to 'today'
-
+# Previous year's range
 start_of_previous_financial_year = pd.Timestamp(start_of_financial_year) - pd.DateOffset(years=1)
 end_of_previous_financial_year = pd.Timestamp(end_of_financial_year) - pd.DateOffset(years=1)
 
+# Convert date ranges to strings
 start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
 end_date_str = end_of_financial_year.strftime('%Y-%m-%d')
 prev_start_date_str = start_of_previous_financial_year.strftime('%Y-%m-%d')
@@ -109,104 +109,96 @@ ORDER BY
 """
 
 try:
-    # --- 1) Monthly Totals for Chart & Metrics ---
-    # Current year
-    current_rows = list(client.query(current_query))
-    current_data = pd.DataFrame([dict(row) for row in current_rows])
-    current_data['month'] = pd.to_datetime(current_data['month'], format='%Y-%m')
+    # 1) Monthly Totals for Chart & Metrics
+    current_data = pd.DataFrame([dict(row) for row in client.query(current_query)])
+    previous_data = pd.DataFrame([dict(row) for row in client.query(previous_query)])
 
-    # Fill missing months
+    current_data['month'] = pd.to_datetime(current_data['month'], format='%Y-%m')
     months_in_fy = pd.date_range(start=start_of_financial_year, end=end_of_financial_year, freq="MS")
     months_df = pd.DataFrame({
         "month": months_in_fy,
         "month_label": [m.strftime("%b-%Y") for m in months_in_fy]
     })
 
+    # Merge & fill missing months
     current_data = months_df.merge(current_data, on='month', how='left')
     current_data['total_amount'] = current_data['total_amount'].fillna(0)
     current_data = current_data.sort_values(by='month')
+
     total_invoiced_current = current_data['total_amount'].sum()
+    total_invoiced_previous = previous_data['total_amount'].sum() if not previous_data.empty else 0
 
-    # Previous year
-    previous_rows = list(client.query(previous_query))
-    previous_data = pd.DataFrame([dict(row) for row in previous_rows])
-    total_invoiced_previous = previous_data['total_amount'].sum()
-
-    # YOY % difference for metrics
+    # % difference for dashboard metric
     if total_invoiced_previous == 0:
         percent_diff = 0.0
     else:
         diff = total_invoiced_current - total_invoiced_previous
         percent_diff = (diff / total_invoiced_previous) * 100
 
-    # --- 2) Client-Level Data for Table ---
-    current_clients_rows = list(client.query(current_clients_query))
-    prev_clients_rows = list(client.query(previous_clients_query))
+    # 2) Client-Level Data
+    current_clients_df = pd.DataFrame([dict(row) for row in client.query(current_clients_query)])
+    prev_clients_df = pd.DataFrame([dict(row) for row in client.query(previous_clients_query)])
+    clients_merged = pd.merge(current_clients_df, prev_clients_df, on='client_name', how='outer').fillna(0)
 
-    current_clients_df = pd.DataFrame([dict(row) for row in current_clients_rows])
-    prev_clients_df = pd.DataFrame([dict(row) for row in prev_clients_rows])
+    # a) Calculate £ difference
+    clients_merged["Difference"] = clients_merged["revenue_current"] - clients_merged["revenue_previous"]
 
-    # Merge on client_name
-    clients_merged = pd.merge(
-        current_clients_df, 
-        prev_clients_df, 
-        on='client_name', 
-        how='outer'
-    ).fillna(0)
-
-    # Convert numeric difference into a % difference for the table
+    # b) Calculate % difference
     def calc_percentage_diff(row):
         if row["revenue_previous"] == 0:
-            return None  # We'll display a dash instead of 0%
+            return None
         return ((row["revenue_current"] - row["revenue_previous"]) / row["revenue_previous"]) * 100
-
     clients_merged["% Difference"] = clients_merged.apply(calc_percentage_diff, axis=1)
 
-    # Rename columns for final display
+    # c) Rename columns
     clients_merged.rename(columns={
         'client_name': 'Client name',
         'revenue_current': 'Revenue YTD',
         'revenue_previous': 'Revenue previous YTD'
     }, inplace=True)
 
-    # Sort by largest YTD revenue
+    # d) Sort by largest YTD revenue
     clients_merged.sort_values(by='Revenue YTD', ascending=False, inplace=True)
 
-    # (A) Insert totals row at bottom
-    # We'll match the top-level metrics:
+    # e) Insert Totals row
+    total_difference = total_invoiced_current - total_invoiced_previous
     totals_row = {
         'Client name': 'Total',
         'Revenue YTD': total_invoiced_current,
         'Revenue previous YTD': total_invoiced_previous,
-        '% Difference': percent_diff  # matches the third metric exactly
+        'Difference': total_difference,
+        '% Difference': percent_diff
     }
-    # Use concat or append to place this row at the end
     clients_merged = pd.concat([clients_merged, pd.DataFrame([totals_row])], ignore_index=True)
 
-    # --- 3) Display UI ---
-
-    # A) Metrics Row
+    # 3) Dashboard: Metrics
     col1, col2, col3 = st.columns(3)
+
+    # Current metric
     with col1:
         st.metric(
-            label=f"Current (1 Oct - {end_of_financial_year.strftime('%d %b %Y')})",
+            label=f"Current ({start_of_financial_year.strftime('%d %b %Y')} - {end_of_financial_year.strftime('%d %b %Y')})",
             value=f"£{total_invoiced_current:,.2f}",
         )
+
+    # Previous metric (FIX: show correct range)
     with col2:
         st.metric(
-            label=f"Previous (1 Oct - {end_of_previous_financial_year.strftime('%d %b %Y')})",
+            label=(
+                f"Previous ("
+                f"{start_of_previous_financial_year.strftime('%d %b %Y')} - "
+                f"{end_of_previous_financial_year.strftime('%d %b %Y')})"
+            ),
             value=f"£{total_invoiced_previous:,.2f}",
         )
+
+    # % difference metric
     with col3:
-        st.metric(
-            label="YOY % Change",
-            value=f"{percent_diff:,.1f}%",
-        )
+        st.metric("YOY % Change", f"{percent_diff:,.1f}%")
 
-    # B) Vertical padding between metrics and chart
-    st.write("")
+    st.write("")  # spacing
 
-    # C) Chart
+    # 4) Chart
     chart = alt.Chart(current_data).mark_bar().encode(
         x=alt.X('month_label:N', title="Month", sort=list(current_data['month_label'])),
         y=alt.Y('total_amount:Q', title="Total Invoiced (£)"),
@@ -221,31 +213,60 @@ try:
     )
     st.altair_chart(chart, use_container_width=True)
 
-    # D) Table (Styled with Pandas Styler)
     st.subheader("Revenue by Client")
 
-    display_columns = ["Client name", "Revenue YTD", "Revenue previous YTD", "% Difference"]
+    # 5) Build Table: now has Difference + % Difference columns
+    display_columns = ["Client name", "Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
     df_for_styling = clients_merged[display_columns].copy()
 
-    # Conditional styling function for % Difference
-    def highlight_diff(val):
-        """Color % green if positive, red if negative."""
-        # If it's None or not numeric, do nothing
+    # Accountancy-style currency formatting
+    def accountancy_format(val):
+        """Format negative numbers in parentheses, else normal. Two decimals, currency sign."""
+        if not isinstance(val, (int, float)):
+            return val
+        if val < 0:
+            return f"(£{abs(val):,.2f})"
+        return f"£{val:,.2f}"
+
+    # Conditional styling for negative/positive
+    def highlight_vals(val):
+        """Color negative red, positive green, else default."""
         if val is None or not isinstance(val, (float, int)):
             return ""
-        return "color: green" if val > 0 else ("color: red" if val < 0 else "")
+        if val < 0:
+            return "color: red"
+        elif val > 0:
+            return "color: green"
+        return ""
 
-    # 1) For None values in "% Difference", we want to show '-'
-    # 2) Convert numeric to one decimal place + '%'
-    # 3) Currency formatting for 'Revenue YTD' and 'Revenue previous YTD'
     styled_df = df_for_styling.style \
-        .hide_index() \
-        .format({
-            "Revenue YTD": "£{:,.2f}",
-            "Revenue previous YTD": "£{:,.2f}",
-            "% Difference": lambda x: "-" if pd.isnull(x) else f"{x:,.1f}%"
-        }) \
-        .applymap(highlight_diff, subset=["% Difference"])
+        .format(
+            {
+                "Revenue YTD": accountancy_format,
+                "Revenue previous YTD": accountancy_format,
+                "Difference": accountancy_format,
+                "% Difference": lambda x: "-" if pd.isnull(x) else f"{x:,.1f}%"
+            }
+        ) \
+        .applymap(highlight_vals, subset=["Difference"]) \
+        .applymap(highlight_vals, subset=["% Difference"])
+
+    # Right-align numeric columns
+    numeric_cols = ["Revenue YTD", "Revenue previous YTD", "Difference", "% Difference"]
+    styled_df.set_properties(**{"text-align": "right"}, subset=numeric_cols)
+
+    # Thicker top border & bold text for last row (the totals row)
+    styled_df.set_table_styles([
+        {"selector": "th.row_heading", "props": [("display", "none")]},
+        {"selector": "th.blank", "props": [("display", "none")]},
+        {
+            "selector": "tbody tr:last-child",
+            "props": [
+                ("font-weight", "bold"),
+                ("border-top", "3px solid black")
+            ]
+        }
+    ], overwrite=False)
 
     st.write(styled_df.to_html(), unsafe_allow_html=True)
 
