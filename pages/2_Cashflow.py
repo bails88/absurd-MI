@@ -7,12 +7,46 @@ import altair as alt
 from datetime import datetime
 from google.cloud import bigquery
 
-def load_day_by_day_data(credentials_info, start_date):
+# Front Matter for custom page title with emoji (optional)
+# ---
+# title: "Cashflow 💸"
+# ---
+
+# 1. Cache the BigQuery client as a resource
+@st.cache_resource
+def load_credentials():
     """
-    Return day-by-day sums of 'due_amount' and 'tax_amount' from 1 Oct onward.
+    Initialize and return a BigQuery client using service account credentials.
+    This function is cached as a resource because it returns a non-serializable object.
     """
-    print("Fetching day-by-day data from BigQuery...")
-    client = bigquery.Client.from_service_account_info(credentials_info)
+    credentials_dict = {
+        "type": os.environ.get("GCP_TYPE"),
+        "project_id": os.environ.get("GCP_PROJECT_ID"),
+        "private_key_id": os.environ.get("GCP_PRIVATE_KEY_ID"),
+        "private_key": os.environ.get("GCP_PRIVATE_KEY"),
+        "client_email": os.environ.get("GCP_CLIENT_EMAIL"),
+        "client_id": os.environ.get("GCP_CLIENT_ID"),
+        "auth_uri": os.environ.get("GCP_AUTH_URI"),
+        "token_uri": os.environ.get("GCP_TOKEN_URI"),
+        "auth_provider_x509_cert_url": os.environ.get("GCP_AUTH_PROVIDER_X509_CERT_URL"),
+        "client_x509_cert_url": os.environ.get("GCP_CLIENT_X509_CERT_URL")
+    }
+
+    # Validate that all required environment variables are present
+    missing_vars = [key for key, value in credentials_dict.items() if value is None]
+    if missing_vars:
+        st.error(f"Missing environment variables: {', '.join(missing_vars)}")
+        st.stop()
+
+    return bigquery.Client.from_service_account_info(credentials_dict)
+
+# 2. Cache data loading functions
+@st.cache_data(ttl=600)  # Cache expires after 10 minutes
+def load_day_by_day_data(client, start_date):
+    """
+    Fetch and return day-by-day sums of 'due_amount' and 'tax_amount' from 1 Oct onward.
+    No upper bound, so any future due dates are included.
+    """
     query = f"""
     SELECT
       due_date,
@@ -32,13 +66,12 @@ def load_day_by_day_data(credentials_info, start_date):
     df = pd.DataFrame([dict(r) for r in rows])
     return df
 
-def load_month_by_month_data(credentials_info, start_date):
+@st.cache_data(ttl=600)  # Cache expires after 10 minutes
+def load_month_by_month_data(client, start_date):
     """
-    Return month-year sums of 'due_amount' and 'tax_amount' from 1 Oct onward
+    Fetch and return month-year sums of 'due_amount' and 'tax_amount' from 1 Oct onward
     to pivot into columns.
     """
-    print("Fetching month-by-month data from BigQuery...")
-    client = bigquery.Client.from_service_account_info(credentials_info)
     query = f"""
     SELECT
       FORMAT_TIMESTAMP('%Y-%m', due_date) AS month_year,
@@ -64,48 +97,32 @@ def main():
     
     st.title("Cashflow 💸")
 
-    # 1. Load credentials from environment variables
-    credentials_dict = {
-        "type": os.environ.get("GCP_TYPE"),
-        "project_id": os.environ.get("GCP_PROJECT_ID"),
-        "private_key_id": os.environ.get("GCP_PRIVATE_KEY_ID"),
-        "private_key": os.environ.get("GCP_PRIVATE_KEY"),
-        "client_email": os.environ.get("GCP_CLIENT_EMAIL"),
-        "client_id": os.environ.get("GCP_CLIENT_ID"),
-        "auth_uri": os.environ.get("GCP_AUTH_URI"),
-        "token_uri": os.environ.get("GCP_TOKEN_URI"),
-        "auth_provider_x509_cert_url": os.environ.get("GCP_AUTH_PROVIDER_X509_CERT_URL"),
-        "client_x509_cert_url": os.environ.get("GCP_CLIENT_X509_CERT_URL")
-    }
+    # 3. Initialize BigQuery client
+    client = load_credentials()
 
-    # 1a. Validate that all credentials are present
-    missing_vars = [key for key, value in credentials_dict.items() if value is None]
-    if missing_vars:
-        st.error(f"Missing environment variables: {', '.join(missing_vars)}")
-        return
-
-    # 2. Determine the start of the current financial year
+    # 4. Determine the start of the current financial year
     today = datetime.today()
     if today.month >= 10:
         start_of_financial_year = datetime(today.year, 10, 1)
     else:
         start_of_financial_year = datetime(today.year - 1, 10, 1)
+
     start_date_str = start_of_financial_year.strftime('%Y-%m-%d')
 
     st.markdown(f"**Data from {start_date_str} onwards, day by day, using `due_date` and summing `due_amount` and `tax_amount`.**")
 
-    # 3. Load day-by-day data from BigQuery with caching
+    # 5. Load day-by-day data from BigQuery with caching
     with st.spinner("Loading day-by-day cashflow data..."):
-        day_df = load_day_by_day_data(credentials_dict, start_date_str)
+        day_df = load_day_by_day_data(client, start_date_str)
 
-    # 4. Convert 'due_date' to datetime
+    # 6. Convert 'due_date' to datetime
     if not day_df.empty:
         day_df['due_date'] = pd.to_datetime(day_df['due_date'])
     else:
-        # Create empty DataFrame with correct columns
+        # Create empty DataFrame with correct columns to avoid errors in the chart
         day_df = pd.DataFrame(columns=['due_date', 'total_amount'])
 
-    # 5. Day-by-day line chart
+    # 7. Day-by-day line chart
     if day_df.empty:
         st.info("No cashflow data found after 1 Oct.")
     else:
@@ -125,20 +142,20 @@ def main():
         )
         st.altair_chart(chart, use_container_width=True)
 
-    # 6. Load month-by-month data with caching
+    # 8. Load month-by-month data with caching
     with st.spinner("Loading month-by-month cashflow data..."):
-        month_df = load_month_by_month_data(credentials_dict, start_date_str)
+        month_df = load_month_by_month_data(client, start_date_str)
 
-    # 7. Process month-by-month data
+    # 9. Process month-by-month data
     if not month_df.empty:
         # Convert "2023-01" to datetime, then to "Jan-2023"
         month_df['month_year'] = pd.to_datetime(month_df['month_year'], format='%Y-%m')
         month_df['month_label'] = month_df['month_year'].dt.strftime('%b-%Y')
     else:
-        # Create empty DataFrame with correct columns
+        # Create empty DataFrame with correct columns to avoid errors
         month_df = pd.DataFrame(columns=['month_year', 'total_amount'])
 
-    # 8. Display month-by-month pivot table
+    # 10. Display month-by-month pivot table
     st.subheader("Month-by-Month Totals")
 
     if month_df.empty:
@@ -153,8 +170,9 @@ def main():
             fill_value=0
         )
 
-        # Optional: Keep only the last 12 months
-        # pivot_table = pivot_table.iloc[:, -12:]
+        # Sort the columns in chronological order
+        sorted_columns = sorted(pivot_table.columns, key=lambda x: datetime.strptime(x, '%b-%Y'))
+        pivot_table = pivot_table[sorted_columns]
 
         # Hide the index
         pivot_table = pivot_table.reset_index(drop=True)
